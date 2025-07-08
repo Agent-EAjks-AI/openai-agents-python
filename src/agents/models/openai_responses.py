@@ -303,10 +303,19 @@ class ConvertedTools:
 class Converter:
     @classmethod
     def convert_tool_choice(
-        cls, tool_choice: Literal["auto", "required", "none"] | str | None
+        cls, tool_choice: Literal["auto", "required", "none"] | str | dict[str, Any] | None
     ) -> response_create_params.ToolChoice | NotGiven:
         if tool_choice is None:
             return NOT_GIVEN
+        elif isinstance(tool_choice, dict):
+            if tool_choice.get("type") == "mcp":
+                return {
+                    "server_label": tool_choice.get("server_label") or "mcp",
+                    "type": "mcp",
+                    "name": tool_choice.get("name"),
+                }
+            else:
+                raise UserError(f"Unknown tool choice: {tool_choice}")
         elif tool_choice == "required":
             return "required"
         elif tool_choice == "auto":
@@ -335,6 +344,7 @@ class Converter:
             }
         elif tool_choice == "mcp":
             return {
+                "server_label": "mcp",
                 "type": "mcp",
             }
         else:
