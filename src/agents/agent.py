@@ -489,7 +489,7 @@ class Agent(AgentBase, Generic[TContext]):
             ) -> Literal["approved", "pending", "rejected"]:
                 has_pending = False
                 for interruption in interruptions:
-                    call_id = interruption._extract_call_id()
+                    call_id = interruption.call_id
                     if not call_id:
                         has_pending = True
                         continue
@@ -508,7 +508,7 @@ class Agent(AgentBase, Generic[TContext]):
                 interruptions: list[ToolApprovalItem],
             ) -> None:
                 for interruption in interruptions:
-                    call_id = interruption._extract_call_id()
+                    call_id = interruption.call_id
                     if not call_id:
                         continue
                     tool_name = RunContextWrapper._resolve_tool_name(interruption)
