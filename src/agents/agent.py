@@ -556,7 +556,7 @@ class Agent(AgentBase, Generic[TContext]):
                     hooks=hooks,
                     previous_response_id=None if resume_state is not None else previous_response_id,
                     conversation_id=None if resume_state is not None else conversation_id,
-                    session=None if resume_state is not None else session,
+                    session=session,
                 )
                 # Dispatch callbacks in the background so slow handlers do not block
                 # event consumption.
@@ -618,7 +618,7 @@ class Agent(AgentBase, Generic[TContext]):
                     hooks=hooks,
                     previous_response_id=None if resume_state is not None else previous_response_id,
                     conversation_id=None if resume_state is not None else conversation_id,
-                    session=None if resume_state is not None else session,
+                    session=session,
                 )
 
             # Store the run result by tool call identity so nested interruptions can be read later.
