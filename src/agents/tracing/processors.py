@@ -253,28 +253,44 @@ class BackendSpanExporter(TracingExporter):
             isinstance(value, float) and not math.isfinite(value)
         )
 
-    def _sanitize_json_compatible_value(self, value: Any) -> Any:
+    def _sanitize_json_compatible_value(self, value: Any, seen_ids: set[int] | None = None) -> Any:
         if value is None or isinstance(value, str | bool | int):
             return value
         if isinstance(value, float):
             return value if math.isfinite(value) else self._UNSERIALIZABLE
+        if seen_ids is None:
+            seen_ids = set()
         if isinstance(value, dict):
+            value_id = id(value)
+            if value_id in seen_ids:
+                return self._UNSERIALIZABLE
+            seen_ids.add(value_id)
             sanitized_dict: dict[str, Any] = {}
-            for key, nested_value in value.items():
-                if not isinstance(key, str):
-                    continue
-                sanitized_nested = self._sanitize_json_compatible_value(nested_value)
-                if sanitized_nested is self._UNSERIALIZABLE:
-                    continue
-                sanitized_dict[key] = sanitized_nested
+            try:
+                for key, nested_value in value.items():
+                    if not isinstance(key, str):
+                        continue
+                    sanitized_nested = self._sanitize_json_compatible_value(nested_value, seen_ids)
+                    if sanitized_nested is self._UNSERIALIZABLE:
+                        continue
+                    sanitized_dict[key] = sanitized_nested
+            finally:
+                seen_ids.remove(value_id)
             return sanitized_dict
         if isinstance(value, list | tuple):
+            value_id = id(value)
+            if value_id in seen_ids:
+                return self._UNSERIALIZABLE
+            seen_ids.add(value_id)
             sanitized_list: list[Any] = []
-            for nested_value in value:
-                sanitized_nested = self._sanitize_json_compatible_value(nested_value)
-                if sanitized_nested is self._UNSERIALIZABLE:
-                    continue
-                sanitized_list.append(sanitized_nested)
+            try:
+                for nested_value in value:
+                    sanitized_nested = self._sanitize_json_compatible_value(nested_value, seen_ids)
+                    if sanitized_nested is self._UNSERIALIZABLE:
+                        continue
+                    sanitized_list.append(sanitized_nested)
+            finally:
+                seen_ids.remove(value_id)
             return sanitized_list
         return self._UNSERIALIZABLE
 

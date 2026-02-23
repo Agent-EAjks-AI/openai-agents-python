@@ -483,6 +483,42 @@ def test_sanitize_for_openai_tracing_api_filters_non_json_values_in_usage_detail
     exporter.close()
 
 
+def test_sanitize_for_openai_tracing_api_handles_cyclic_usage_values():
+    exporter = BackendSpanExporter(api_key="test_key")
+    cyclic_dict: dict[str, Any] = {}
+    cyclic_dict["self"] = cyclic_dict
+    cyclic_list: list[Any] = []
+    cyclic_list.append(cyclic_list)
+
+    payload = {
+        "object": "trace.span",
+        "span_data": {
+            "type": "generation",
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "input_tokens_details": cyclic_dict,
+                "details": {
+                    "provider": "litellm",
+                    "cycle": cyclic_list,
+                },
+            },
+        },
+    }
+
+    sanitized = exporter._sanitize_for_openai_tracing_api(payload)
+    assert sanitized["span_data"]["usage"] == {
+        "input_tokens": 1,
+        "output_tokens": 2,
+        "details": {
+            "provider": "litellm",
+            "cycle": [],
+            "input_tokens_details": {},
+        },
+    }
+    exporter.close()
+
+
 def test_sanitize_for_openai_tracing_api_drops_non_dict_generation_usage_details():
     exporter = BackendSpanExporter(api_key="test_key")
     payload = {
