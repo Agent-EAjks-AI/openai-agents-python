@@ -179,7 +179,7 @@ class BackendSpanExporter(TracingExporter):
         return self.endpoint.rstrip("/") == self._OPENAI_TRACING_INGEST_ENDPOINT.rstrip("/")
 
     def _sanitize_for_openai_tracing_api(self, payload_item: dict[str, Any]) -> dict[str, Any]:
-        """Drop fields known to be rejected by OpenAI tracing ingestion."""
+        """Move unsupported generation usage fields under usage.details for traces ingest."""
         span_data = payload_item.get("span_data")
         if not isinstance(span_data, dict):
             return payload_item
@@ -191,19 +191,49 @@ class BackendSpanExporter(TracingExporter):
         if not isinstance(usage, dict):
             return payload_item
 
-        filtered_usage = {
-            key: value
-            for key, value in usage.items()
-            if key in self._OPENAI_TRACING_ALLOWED_USAGE_KEYS
-        }
-        if filtered_usage == usage:
+        sanitized_usage = self._sanitize_generation_usage_for_openai_tracing_api(usage)
+
+        if sanitized_usage is None:
+            sanitized_span_data = dict(span_data)
+            sanitized_span_data.pop("usage", None)
+            sanitized_payload_item = dict(payload_item)
+            sanitized_payload_item["span_data"] = sanitized_span_data
+            return sanitized_payload_item
+
+        if sanitized_usage == usage:
             return payload_item
 
         sanitized_span_data = dict(span_data)
-        sanitized_span_data["usage"] = filtered_usage
+        sanitized_span_data["usage"] = sanitized_usage
         sanitized_payload_item = dict(payload_item)
         sanitized_payload_item["span_data"] = sanitized_span_data
         return sanitized_payload_item
+
+    def _sanitize_generation_usage_for_openai_tracing_api(
+        self, usage: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        if not isinstance(input_tokens, int | float) or not isinstance(output_tokens, int | float):
+            return None
+
+        details: dict[str, Any] = {}
+        existing_details = usage.get("details")
+        if isinstance(existing_details, dict):
+            details.update(existing_details)
+
+        for key, value in usage.items():
+            if key in self._OPENAI_TRACING_ALLOWED_USAGE_KEYS or key == "details" or value is None:
+                continue
+            details[key] = value
+
+        sanitized_usage: dict[str, Any] = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        }
+        if details:
+            sanitized_usage["details"] = details
+        return sanitized_usage
 
     def close(self):
         """Close the underlying HTTP client."""
