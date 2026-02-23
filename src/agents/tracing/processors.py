@@ -33,8 +33,6 @@ class BackendSpanExporter(TracingExporter):
         {
             "input_tokens",
             "output_tokens",
-            "input_tokens_details",
-            "output_tokens_details",
         }
     )
 
