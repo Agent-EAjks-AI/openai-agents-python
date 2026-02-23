@@ -561,6 +561,27 @@ def test_sanitize_for_openai_tracing_api_drops_generation_usage_missing_required
     exporter.close()
 
 
+def test_sanitize_for_openai_tracing_api_rejects_boolean_token_counts():
+    exporter = BackendSpanExporter(api_key="test_key")
+    payload = {
+        "object": "trace.span",
+        "span_data": {
+            "type": "generation",
+            "usage": {
+                "input_tokens": True,
+                "output_tokens": False,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    }
+    sanitized = exporter._sanitize_for_openai_tracing_api(payload)
+    assert sanitized["span_data"] == {
+        "type": "generation",
+    }
+    exporter.close()
+
+
 def test_sanitize_for_openai_tracing_api_skips_non_dict_generation_usage():
     exporter = BackendSpanExporter(api_key="test_key")
     payload = {

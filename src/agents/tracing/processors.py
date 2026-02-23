@@ -249,6 +249,8 @@ class BackendSpanExporter(TracingExporter):
         return sanitized_usage
 
     def _is_finite_json_number(self, value: Any) -> bool:
+        if isinstance(value, bool):
+            return False
         return isinstance(value, int | float) and not (
             isinstance(value, float) and not math.isfinite(value)
         )
