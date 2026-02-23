@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import queue
 import random
@@ -35,6 +36,7 @@ class BackendSpanExporter(TracingExporter):
             "output_tokens",
         }
     )
+    _UNSERIALIZABLE = object()
 
     def __init__(
         self,
@@ -214,18 +216,29 @@ class BackendSpanExporter(TracingExporter):
     ) -> dict[str, Any] | None:
         input_tokens = usage.get("input_tokens")
         output_tokens = usage.get("output_tokens")
-        if not isinstance(input_tokens, int | float) or not isinstance(output_tokens, int | float):
+        if not self._is_finite_json_number(input_tokens) or not self._is_finite_json_number(
+            output_tokens
+        ):
             return None
 
         details: dict[str, Any] = {}
         existing_details = usage.get("details")
         if isinstance(existing_details, dict):
-            details.update(existing_details)
+            for key, value in existing_details.items():
+                if not isinstance(key, str):
+                    continue
+                sanitized_value = self._sanitize_json_compatible_value(value)
+                if sanitized_value is self._UNSERIALIZABLE:
+                    continue
+                details[key] = sanitized_value
 
         for key, value in usage.items():
             if key in self._OPENAI_TRACING_ALLOWED_USAGE_KEYS or key == "details" or value is None:
                 continue
-            details[key] = value
+            sanitized_value = self._sanitize_json_compatible_value(value)
+            if sanitized_value is self._UNSERIALIZABLE:
+                continue
+            details[key] = sanitized_value
 
         sanitized_usage: dict[str, Any] = {
             "input_tokens": input_tokens,
@@ -234,6 +247,36 @@ class BackendSpanExporter(TracingExporter):
         if details:
             sanitized_usage["details"] = details
         return sanitized_usage
+
+    def _is_finite_json_number(self, value: Any) -> bool:
+        return isinstance(value, int | float) and not (
+            isinstance(value, float) and not math.isfinite(value)
+        )
+
+    def _sanitize_json_compatible_value(self, value: Any) -> Any:
+        if value is None or isinstance(value, str | bool | int):
+            return value
+        if isinstance(value, float):
+            return value if math.isfinite(value) else self._UNSERIALIZABLE
+        if isinstance(value, dict):
+            sanitized_dict: dict[str, Any] = {}
+            for key, nested_value in value.items():
+                if not isinstance(key, str):
+                    continue
+                sanitized_nested = self._sanitize_json_compatible_value(nested_value)
+                if sanitized_nested is self._UNSERIALIZABLE:
+                    continue
+                sanitized_dict[key] = sanitized_nested
+            return sanitized_dict
+        if isinstance(value, list | tuple):
+            sanitized_list: list[Any] = []
+            for nested_value in value:
+                sanitized_nested = self._sanitize_json_compatible_value(nested_value)
+                if sanitized_nested is self._UNSERIALIZABLE:
+                    continue
+                sanitized_list.append(sanitized_nested)
+            return sanitized_list
+        return self._UNSERIALIZABLE
 
     def close(self):
         """Close the underlying HTTP client."""

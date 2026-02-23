@@ -444,6 +444,45 @@ def test_sanitize_for_openai_tracing_api_moves_unsupported_generation_usage_to_d
     exporter.close()
 
 
+def test_sanitize_for_openai_tracing_api_filters_non_json_values_in_usage_details():
+    exporter = BackendSpanExporter(api_key="test_key")
+    non_json = object()
+    payload = {
+        "object": "trace.span",
+        "span_data": {
+            "type": "generation",
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "input_tokens_details": {
+                    "cached_tokens": 0,
+                    "bad": non_json,
+                },
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "provider_usage": [1, non_json, {"ok": True, "bad": non_json}],
+                "details": {
+                    "provider": "litellm",
+                    "bad": non_json,
+                    "nested": {"keep": 1, "bad": non_json},
+                },
+            },
+        },
+    }
+    sanitized = exporter._sanitize_for_openai_tracing_api(payload)
+    assert sanitized["span_data"]["usage"] == {
+        "input_tokens": 1,
+        "output_tokens": 2,
+        "details": {
+            "provider": "litellm",
+            "nested": {"keep": 1},
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "provider_usage": [1, {"ok": True}],
+        },
+    }
+    exporter.close()
+
+
 def test_sanitize_for_openai_tracing_api_drops_non_dict_generation_usage_details():
     exporter = BackendSpanExporter(api_key="test_key")
     payload = {
