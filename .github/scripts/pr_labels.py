@@ -8,6 +8,7 @@ import pathlib
 import subprocess
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Final
 
 ALLOWED_LABELS: Final[set[str]] = {
@@ -56,6 +57,14 @@ CORE_EXCLUDED_PREFIXES: Final[tuple[str, ...]] = (
     "src/agents/extensions/",
     "src/agents/models/",
 )
+
+PR_CONTEXT_DEFAULT_PATH = ".tmp/pr-labels/pr-context.json"
+
+
+@dataclass(frozen=True)
+class PRContext:
+    title: str = ""
+    body: str = ""
 
 
 def read_file_at(commit: str | None, path: str) -> str | None:
@@ -214,6 +223,28 @@ def load_json(path: pathlib.Path) -> Any:
     return json.loads(path.read_text())
 
 
+def load_pr_context(path: pathlib.Path) -> PRContext:
+    if not path.exists():
+        return PRContext()
+
+    try:
+        payload = load_json(path)
+    except json.JSONDecodeError:
+        return PRContext()
+
+    if not isinstance(payload, dict):
+        return PRContext()
+
+    title = payload.get("title", "")
+    body = payload.get("body", "")
+    if not isinstance(title, str):
+        title = ""
+    if not isinstance(body, str):
+        body = ""
+
+    return PRContext(title=title, body=body)
+
+
 def load_codex_labels(path: pathlib.Path) -> tuple[list[str], bool]:
     if not path.exists():
         return [], False
@@ -248,8 +279,22 @@ def fetch_existing_labels(pr_number: str) -> set[str]:
     return {label for label in result.splitlines() if label}
 
 
+def infer_title_intent_labels(pr_context: PRContext) -> set[str]:
+    normalized_title = pr_context.title.strip().lower()
+
+    bug_prefixes = ("fix:", "fix(", "bug:", "bugfix:", "hotfix:", "regression:")
+    enhancement_prefixes = ("feat:", "feat(", "feature:", "enhancement:")
+
+    if normalized_title.startswith(bug_prefixes):
+        return {"bug"}
+    if normalized_title.startswith(enhancement_prefixes):
+        return {"enhancement"}
+    return set()
+
+
 def compute_desired_labels(
     *,
+    pr_context: PRContext,
     changed_files: Sequence[str],
     diff_text: str,
     codex_ran: bool,
@@ -259,6 +304,11 @@ def compute_desired_labels(
     head_sha: str | None,
 ) -> set[str]:
     desired: set[str] = set()
+    codex_label_set = {label for label in codex_labels if label in ALLOWED_LABELS}
+    codex_feature_labels = codex_label_set & FEATURE_LABELS
+    codex_model_only_labels = codex_label_set & MODEL_ONLY_LABELS
+    fallback_feature_labels = infer_fallback_labels(changed_files)
+    title_intent_labels = infer_title_intent_labels(pr_context)
 
     if "pyproject.toml" in changed_files:
         desired.add("project")
@@ -274,21 +324,30 @@ def compute_desired_labels(
     if dependencies_allowed:
         desired.add("dependencies")
 
-    if codex_ran and codex_output_valid:
-        for label in codex_labels:
-            if label == "dependencies" and not dependencies_allowed:
-                continue
-            if label in ALLOWED_LABELS:
-                desired.add(label)
-        return desired
+    if codex_ran and codex_output_valid and codex_feature_labels:
+        desired.update(codex_feature_labels)
+    else:
+        desired.update(fallback_feature_labels)
 
-    desired.update(infer_fallback_labels(changed_files))
+    if title_intent_labels:
+        desired.update(title_intent_labels)
+    elif codex_ran and codex_output_valid:
+        desired.update(codex_model_only_labels)
+
     return desired
 
 
-def compute_managed_labels(*, codex_ran: bool, codex_output_valid: bool) -> set[str]:
+def compute_managed_labels(
+    *,
+    pr_context: PRContext,
+    codex_ran: bool,
+    codex_output_valid: bool,
+    codex_labels: Sequence[str],
+) -> set[str]:
     managed = DETERMINISTIC_LABELS | FEATURE_LABELS
-    if codex_ran and codex_output_valid:
+    title_intent_labels = infer_title_intent_labels(pr_context)
+    codex_label_set = {label for label in codex_labels if label in MODEL_ONLY_LABELS}
+    if title_intent_labels or (codex_ran and codex_output_valid and codex_label_set):
         managed |= MODEL_ONLY_LABELS
     return managed
 
@@ -303,6 +362,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=os.environ.get("CODEX_OUTPUT_PATH", ".tmp/codex/outputs/pr-labels.json"),
     )
     parser.add_argument("--codex-conclusion", default=os.environ.get("CODEX_CONCLUSION", ""))
+    parser.add_argument(
+        "--pr-context-path",
+        default=os.environ.get("PR_CONTEXT_PATH", PR_CONTEXT_DEFAULT_PATH),
+    )
     parser.add_argument(
         "--changed-files-path",
         default=os.environ.get("CHANGED_FILES_PATH", ".tmp/pr-labels/changed-files.txt"),
@@ -322,8 +385,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     changed_files_path = pathlib.Path(args.changed_files_path)
     changes_diff_path = pathlib.Path(args.changes_diff_path)
     codex_output_path = pathlib.Path(args.codex_output_path)
+    pr_context_path = pathlib.Path(args.pr_context_path)
     codex_conclusion = args.codex_conclusion.strip().lower()
     codex_ran = bool(codex_conclusion) and codex_conclusion != "skipped"
+    pr_context = load_pr_context(pr_context_path)
 
     changed_files = []
     if changed_files_path.exists():
@@ -339,6 +404,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "model-only labels."
         )
     desired = compute_desired_labels(
+        pr_context=pr_context,
         changed_files=changed_files,
         diff_text=diff_text,
         codex_ran=codex_ran,
@@ -350,8 +416,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     existing = fetch_existing_labels(args.pr_number)
     managed_labels = compute_managed_labels(
+        pr_context=pr_context,
         codex_ran=codex_ran,
         codex_output_valid=codex_output_valid,
+        codex_labels=codex_labels,
     )
     to_add = sorted(desired - existing)
     to_remove = sorted((existing & managed_labels) - desired)

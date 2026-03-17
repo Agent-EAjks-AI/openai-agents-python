@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import ModuleType
@@ -13,6 +14,7 @@ def load_pr_labels_module() -> Any:
     assert spec.loader is not None
     module = module_from_spec(spec)
     assert isinstance(module, ModuleType)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return cast(Any, module)
 
@@ -40,6 +42,7 @@ def test_infer_fallback_labels_marks_core_for_runtime_changes() -> None:
 
 def test_compute_desired_labels_removes_stale_fallback_labels() -> None:
     desired = pr_labels.compute_desired_labels(
+        pr_context=pr_labels.PRContext(),
         changed_files=["src/agents/models/chatcmpl_converter.py"],
         diff_text="",
         codex_ran=False,
@@ -54,6 +57,7 @@ def test_compute_desired_labels_removes_stale_fallback_labels() -> None:
 
 def test_compute_desired_labels_falls_back_when_codex_output_is_invalid() -> None:
     desired = pr_labels.compute_desired_labels(
+        pr_context=pr_labels.PRContext(),
         changed_files=["src/agents/run_internal/approvals.py"],
         diff_text="",
         codex_ran=True,
@@ -66,9 +70,56 @@ def test_compute_desired_labels_falls_back_when_codex_output_is_invalid() -> Non
     assert desired == {"feature:core"}
 
 
-def test_compute_managed_labels_preserves_model_only_labels_without_valid_codex_output() -> None:
-    managed = pr_labels.compute_managed_labels(codex_ran=True, codex_output_valid=False)
+def test_compute_desired_labels_uses_fallback_feature_labels_when_codex_valid_but_empty() -> None:
+    desired = pr_labels.compute_desired_labels(
+        pr_context=pr_labels.PRContext(),
+        changed_files=["src/agents/run_internal/approvals.py"],
+        diff_text="",
+        codex_ran=True,
+        codex_output_valid=True,
+        codex_labels=[],
+        base_sha=None,
+        head_sha=None,
+    )
+
+    assert desired == {"feature:core"}
+
+
+def test_compute_desired_labels_infers_bug_from_fix_title() -> None:
+    desired = pr_labels.compute_desired_labels(
+        pr_context=pr_labels.PRContext(title="fix: stop streamed tool execution"),
+        changed_files=["src/agents/run_internal/approvals.py"],
+        diff_text="",
+        codex_ran=True,
+        codex_output_valid=True,
+        codex_labels=[],
+        base_sha=None,
+        head_sha=None,
+    )
+
+    assert desired == {"bug", "feature:core"}
+
+
+def test_compute_managed_labels_preserves_model_only_labels_without_signal() -> None:
+    managed = pr_labels.compute_managed_labels(
+        pr_context=pr_labels.PRContext(),
+        codex_ran=True,
+        codex_output_valid=True,
+        codex_labels=[],
+    )
 
     assert "bug" not in managed
     assert "enhancement" not in managed
     assert "feature:core" in managed
+
+
+def test_compute_managed_labels_manages_model_only_labels_with_fix_title() -> None:
+    managed = pr_labels.compute_managed_labels(
+        pr_context=pr_labels.PRContext(title="fix: stop streamed tool execution"),
+        codex_ran=True,
+        codex_output_valid=True,
+        codex_labels=[],
+    )
+
+    assert "bug" in managed
+    assert "enhancement" in managed
